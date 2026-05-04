@@ -48,7 +48,8 @@ export function Toolbar({
   return (
     <div style={styles.toolbar}>
       <div style={styles.left}>
-        <span style={styles.logo}>⬡ IMS AI Studio Recorder</span>
+        <img src="/ericsson-logo.png" alt="Ericsson" style={styles.logoImg} />
+        <span style={styles.logo}>IMS AI Studio Recorder</span>
       </div>
 
       <div style={styles.center}>
@@ -180,6 +181,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontSize: 15,
     letterSpacing: -0.3,
+  },
+  logoImg: {
+    height: 22,
+    width: "auto",
   },
   center: {
     display: "flex",
