@@ -15,7 +15,6 @@ variables:
   APP_NAME: ims-ai-studio-recorder
   APP_PORT: "9019"
   CONTAINER_PORT: "80"
-  DOMAIN: recorder.ims.ews.gic.ericsson.se
 
 build:
   stage: build
@@ -66,27 +65,6 @@ deploy:
     - curl -fsS "http://127.0.0.1:$APP_PORT/health" || (echo "[deploy] Health check failed" && docker logs "$APP_NAME" && exit 1)
     - echo "[deploy] Deployment successful"
     - docker ps --filter "name=$APP_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-    # Ensure domain is registered in gateway
-    - >-
-      if ! docker exec ims-proxy test -f /etc/nginx/conf.d/recorder.conf; then
-        echo "[deploy] Registering domain $DOMAIN -> port $APP_PORT";
-        printf '%s\n'
-          "# IMS AI Studio Recorder — $DOMAIN → :$APP_PORT"
-          "server {"
-          "    listen 80;"
-          "    server_name $DOMAIN;"
-          ""
-          "    location / {"
-          "        proxy_pass http://host.docker.internal:$APP_PORT;"
-          "        include /etc/nginx/snippets/proxy-headers.conf;"
-          "    }"
-          "}" > /tmp/recorder.conf;
-        docker cp /tmp/recorder.conf ims-proxy:/etc/nginx/conf.d/recorder.conf;
-        docker exec ims-proxy nginx -t && docker exec ims-proxy nginx -s reload;
-        echo "[deploy] Domain $DOMAIN registered and nginx reloaded";
-      else
-        echo "[deploy] Domain config already exists in gateway";
-      fi
 
 rollback:
   stage: rollback
