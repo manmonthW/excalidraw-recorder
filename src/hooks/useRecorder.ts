@@ -58,6 +58,7 @@ export function useRecorder({
   const canvasStreamRef = useRef<MediaStream | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const resultResolveRef = useRef<((r: RecordingResult | null) => void) | null>(null);
 
   const cleanup = useCallback(() => {
@@ -69,6 +70,12 @@ export function useRecorder({
     canvasStreamRef.current = null;
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     micStreamRef.current = null;
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {
+        // Ignore close errors during cleanup.
+      });
+      audioContextRef.current = null;
+    }
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current = null;
     recorderRef.current = null;
@@ -82,6 +89,21 @@ export function useRecorder({
       const elapsed = accumulatedRef.current + (Date.now() - startTimeRef.current);
       setState((s) => ({ ...s, elapsedSeconds: Math.floor(elapsed / 1000) }));
     }, 200);
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    const recorder = recorderRef.current;
+    if (recorder && (recorder.state === "recording" || recorder.state === "paused")) {
+      try {
+        recorder.stop();
+      } catch {
+        // Already stopping
+      }
+    }
   }, []);
 
   const startRecording = useCallback(
@@ -127,6 +149,7 @@ export function useRecorder({
 
           // Mix audio via AudioContext
           const audioCtx = new AudioContext();
+          audioContextRef.current = audioCtx;
           const micSource = audioCtx.createMediaStreamSource(micStream);
           const destination = audioCtx.createMediaStreamDestination();
           micSource.connect(destination);
@@ -152,6 +175,7 @@ export function useRecorder({
         recorder.onstop = () => {
           const elapsed = accumulatedRef.current + (Date.now() - startTimeRef.current);
           const blob = new Blob(chunksRef.current, { type: mimeType });
+          resultResolveRef.current = null;
           if (blob.size > 0) {
             resolve({ blob, duration: elapsed, mimeType });
           } else {
@@ -166,6 +190,7 @@ export function useRecorder({
           });
         };
         recorder.onerror = () => {
+          resultResolveRef.current = null;
           resolve(null);
           cleanup();
           setState({
@@ -189,23 +214,8 @@ export function useRecorder({
 
       return resultPromise;
     },
-    [canvasRef, microphoneEnabled, microphoneDeviceId, frameRate, cleanup, startTimer],
+    [canvasRef, microphoneEnabled, microphoneDeviceId, frameRate, cleanup, startTimer, stopRecording],
   );
-
-  const stopRecording = useCallback(() => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    const recorder = recorderRef.current;
-    if (recorder && (recorder.state === "recording" || recorder.state === "paused")) {
-      try {
-        recorder.stop();
-      } catch {
-        // Already stopping
-      }
-    }
-  }, []);
 
   const togglePause = useCallback(() => {
     const recorder = recorderRef.current;

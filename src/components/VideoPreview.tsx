@@ -1,103 +1,265 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatTime } from "@/lib/videoUtils";
+import { getTransformAtTime, type ZoomKeyframe } from "@/lib/motionEngine";
+import { Timeline } from "./Timeline";
+import { ZoomEditor } from "./ZoomEditor";
+
+interface EditSnapshot {
+  keyframes: ZoomKeyframe[];
+  trimStart: number;
+  trimEnd: number;
+  selectedId: string | null;
+}
 
 interface VideoPreviewProps {
   blob: Blob;
+  onKeyframesChange: (keyframes: ZoomKeyframe[]) => void;
   onTrimChange: (startMs: number, endMs: number) => void;
+  onExport: (format: "webm" | "mp4") => void;
+  onDiscard: () => void;
   onClose: () => void;
 }
 
-export function VideoPreview({ blob, onTrimChange, onClose }: VideoPreviewProps) {
+export function VideoPreview({ blob, onKeyframesChange, onTrimChange, onExport, onDiscard, onClose }: VideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const rafRef = useRef<number>(0);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [keyframes, setKeyframes] = useState<ZoomKeyframe[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const urlRef = useRef("");
+  const [undoStack, setUndoStack] = useState<EditSnapshot[]>([]);
+
+  // Sync keyframes to parent whenever they change
+  useEffect(() => {
+    onKeyframesChange(keyframes);
+  }, [keyframes, onKeyframesChange]);
+
+  const pushUndoSnapshot = useCallback(() => {
+    setUndoStack((prev) => {
+      const snapshot: EditSnapshot = {
+        keyframes: keyframes.map((kf) => ({ ...kf })),
+        trimStart,
+        trimEnd,
+        selectedId,
+      };
+      const next = [...prev, snapshot];
+      return next.length > 80 ? next.slice(next.length - 80) : next;
+    });
+  }, [keyframes, trimStart, trimEnd, selectedId]);
 
   useEffect(() => {
-    urlRef.current = URL.createObjectURL(blob);
+    const video = videoRef.current;
+    if (!video) return;
+
+    const url = URL.createObjectURL(blob);
+    video.src = url;
+    video.load();
+
     return () => {
-      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      video.pause();
+      if (video.src === url) {
+        video.removeAttribute("src");
+        video.load();
+      }
+      URL.revokeObjectURL(url);
     };
   }, [blob]);
+
+  // Compute current zoom transform for preview
+  const transform = getTransformAtTime(currentTime, keyframes);
+  const hasZoom = transform.scale > 1.001;
+
+  // RAF loop to update currentTime smoothly during playback
+  useEffect(() => {
+    if (!isPlaying) return;
+    const tick = () => {
+      const video = videoRef.current;
+      if (video && !video.paused) {
+        setCurrentTime(video.currentTime);
+        // Stop at trim end
+        if (video.currentTime >= trimEnd) {
+          video.pause();
+          setIsPlaying(false);
+        }
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [isPlaying, trimEnd]);
 
   const handleLoadedMetadata = () => {
     const video = videoRef.current;
     if (!video) return;
-    // Handle Infinity duration (common with WebM)
     if (!isFinite(video.duration)) {
       video.currentTime = 1e10;
       video.onseeked = () => {
-        setDuration(video.currentTime);
-        setTrimEnd(video.currentTime);
+        const dur = video.currentTime;
+        setDuration(dur);
+        setTrimEnd(dur);
+        onTrimChange(0, dur * 1000);
         video.currentTime = 0;
         video.onseeked = null;
       };
     } else {
       setDuration(video.duration);
       setTrimEnd(video.duration);
+      onTrimChange(0, video.duration * 1000);
     }
   };
 
-  const handleTimeUpdate = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    setCurrentTime(video.currentTime);
-    if (video.currentTime >= trimEnd) {
-      video.pause();
-      setIsPlaying(false);
-    }
-  };
-
-  const togglePlay = () => {
+  const togglePlay = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
     if (isPlaying) {
       video.pause();
+      setIsPlaying(false);
     } else {
+      // If past trim end or before trim start, jump to trimStart
       if (video.currentTime >= trimEnd || video.currentTime < trimStart) {
         video.currentTime = trimStart;
+        setCurrentTime(trimStart);
       }
-      video.play();
+      video.play()
+        .then(() => {
+          setIsPlaying(true);
+        })
+        .catch((err) => {
+          console.warn("Preview play failed:", err);
+          setIsPlaying(false);
+        });
     }
-    setIsPlaying(!isPlaying);
+  }, [isPlaying, trimStart, trimEnd]);
+
+  const handleSeek = useCallback((sec: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = sec;
+    setCurrentTime(sec);
+  }, []);
+
+  const handleVideoClick = (e: React.MouseEvent<HTMLVideoElement>) => {
+    // If a keyframe is selected, clicking video sets its center point
+    if (selectedId) {
+      pushUndoSnapshot();
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      setKeyframes((prev) =>
+        prev.map((kf) =>
+          kf.id === selectedId ? { ...kf, centerX: x, centerY: y } : kf,
+        ),
+      );
+      return;
+    }
+    togglePlay();
   };
 
-  const handleTrimStartChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setTrimStart(val);
-    onTrimChange(val * 1000, trimEnd * 1000);
-    if (videoRef.current) videoRef.current.currentTime = val;
-  };
+  const handleKeyframesChange = useCallback((updated: ZoomKeyframe[]) => {
+    pushUndoSnapshot();
+    setKeyframes(updated);
+  }, [pushUndoSnapshot]);
 
-  const handleTrimEndChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setTrimEnd(val);
-    onTrimChange(trimStart * 1000, val * 1000);
-  };
+  const handleTrimRangeChange = useCallback((startSec: number, endSec: number) => {
+    pushUndoSnapshot();
+    setTrimStart(startSec);
+    setTrimEnd(endSec);
+    onTrimChange(startSec * 1000, endSec * 1000);
+  }, [onTrimChange, pushUndoSnapshot]);
+
+  const handleDeleteKeyframe = useCallback(() => {
+    if (!selectedId) return;
+    pushUndoSnapshot();
+    setKeyframes((prev) => prev.filter((kf) => kf.id !== selectedId));
+    setSelectedId(null);
+  }, [selectedId, pushUndoSnapshot]);
+
+  const handleKeyframeUpdate = useCallback(
+    (updated: ZoomKeyframe) => {
+      pushUndoSnapshot();
+      setKeyframes((prev) =>
+        prev.map((kf) => (kf.id === updated.id ? updated : kf)),
+      );
+    },
+    [pushUndoSnapshot],
+  );
+
+  const handleUndo = useCallback(() => {
+    setUndoStack((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      setKeyframes(last.keyframes.map((kf) => ({ ...kf })));
+      setTrimStart(last.trimStart);
+      setTrimEnd(last.trimEnd);
+      setSelectedId(last.selectedId);
+      onTrimChange(last.trimStart * 1000, last.trimEnd * 1000);
+      return prev.slice(0, -1);
+    });
+  }, [onTrimChange]);
+
+  useEffect(() => {
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "z") {
+        ev.preventDefault();
+        handleUndo();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleUndo]);
+
+  const selectedKeyframe = keyframes.find((kf) => kf.id === selectedId);
 
   return (
     <div style={styles.overlay}>
       <div style={styles.modal}>
+        {/* Header with actions — like Screen Studio top bar */}
         <div style={styles.header}>
-          <h3 style={{ margin: 0, fontSize: 16 }}>Preview & Trim</h3>
-          <button onClick={onClose} style={styles.closeBtn}>✕</button>
+          <h3 style={{ margin: 0, fontSize: 16 }}>Preview & Edit</h3>
+          <div style={styles.headerActions}>
+            <button
+              onClick={handleUndo}
+              style={{ ...styles.headerBtn, opacity: undoStack.length > 0 ? 1 : 0.45 }}
+              title="Undo last edit"
+              disabled={undoStack.length === 0}
+            >
+              Undo
+            </button>
+            <button onClick={() => onExport("webm")} style={styles.exportBtn} title="Export as WebM">
+              WebM
+            </button>
+            <button onClick={() => onExport("mp4")} style={styles.exportBtn} title="Export as MP4">
+              MP4
+            </button>
+            <button onClick={onDiscard} style={styles.discardBtn} title="Discard recording">
+              Discard
+            </button>
+            <button onClick={onClose} style={styles.closeBtn} title="Close preview">
+              Close
+            </button>
+          </div>
         </div>
 
+        {/* Video preview with zoom effect */}
         <div style={styles.videoContainer}>
           <video
             ref={videoRef}
-            src={urlRef.current}
             onLoadedMetadata={handleLoadedMetadata}
-            onTimeUpdate={handleTimeUpdate}
             onEnded={() => setIsPlaying(false)}
-            style={styles.video}
-            onClick={togglePlay}
+            style={{
+              ...styles.video,
+              cursor: selectedId ? "crosshair" : "pointer",
+              transform: hasZoom ? `scale(${transform.scale})` : "none",
+              transformOrigin: `${transform.centerX * 100}% ${transform.centerY * 100}%`,
+            }}
+            onClick={handleVideoClick}
           />
         </div>
 
+        {/* Controls */}
         <div style={styles.controls}>
           <button onClick={togglePlay} style={styles.playBtn}>
             {isPlaying ? "⏸" : "▶"}
@@ -105,37 +267,43 @@ export function VideoPreview({ blob, onTrimChange, onClose }: VideoPreviewProps)
           <span style={styles.timeDisplay}>
             {formatTime(Math.floor(currentTime))} / {formatTime(Math.floor(duration))}
           </span>
+          {trimStart > 0 || trimEnd < duration ? (
+            <span style={styles.trimInfo}>
+              ✂ {formatTime(Math.floor(trimStart))} – {formatTime(Math.floor(trimEnd))}
+              ({formatTime(Math.floor(trimEnd - trimStart))})
+            </span>
+          ) : null}
+          {selectedId && (
+            <span style={styles.zoomHint}>
+              🎯 Click video to set zoom center
+            </span>
+          )}
         </div>
 
-        <div style={styles.trimSection}>
-          <div style={styles.trimLabel}>
-            <span>Trim Start: {formatTime(Math.floor(trimStart))}</span>
-            <span>Trim End: {formatTime(Math.floor(trimEnd))}</span>
-          </div>
-          <div style={styles.sliderRow}>
-            <input
-              type="range"
-              min={0}
-              max={duration}
-              step={0.1}
-              value={trimStart}
-              onChange={handleTrimStartChange}
-              style={{ ...styles.slider, accentColor: "#3b82f6" }}
-            />
-            <input
-              type="range"
-              min={0}
-              max={duration}
-              step={0.1}
-              value={trimEnd}
-              onChange={handleTrimEndChange}
-              style={{ ...styles.slider, accentColor: "#22c55e" }}
-            />
-          </div>
-          <div style={styles.trimInfo}>
-            Selected: {formatTime(Math.floor(trimEnd - trimStart))}
-          </div>
-        </div>
+        {/* Zoom editor panel */}
+        {selectedKeyframe && (
+          <ZoomEditor
+            keyframe={selectedKeyframe}
+            onChange={handleKeyframeUpdate}
+            onDelete={handleDeleteKeyframe}
+          />
+        )}
+
+        {/* Timeline */}
+        {duration > 0 && (
+          <Timeline
+            durationSec={duration}
+            currentTimeSec={currentTime}
+            trimStartSec={trimStart}
+            trimEndSec={trimEnd}
+            keyframes={keyframes}
+            selectedKeyframeId={selectedId}
+            onSeek={handleSeek}
+            onTrimChange={handleTrimRangeChange}
+            onKeyframesChange={handleKeyframesChange}
+            onSelectKeyframe={setSelectedId}
+          />
+        )}
       </div>
     </div>
   );
@@ -154,9 +322,9 @@ const styles: Record<string, React.CSSProperties> = {
   modal: {
     background: "#1e1e2e",
     borderRadius: 12,
-    width: "80vw",
-    maxWidth: 900,
-    maxHeight: "90vh",
+    width: "85vw",
+    maxWidth: 1000,
+    maxHeight: "92vh",
     overflow: "auto",
     color: "#cdd6f4",
     fontFamily: "'Inter', system-ui, sans-serif",
@@ -167,6 +335,41 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     padding: "12px 16px",
     borderBottom: "1px solid #313244",
+  },
+  headerActions: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+  },
+  headerBtn: {
+    background: "#475569",
+    border: "none",
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "6px 14px",
+    borderRadius: 6,
+    cursor: "pointer",
+  },
+  exportBtn: {
+    background: "#3b82f6",
+    border: "none",
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "6px 14px",
+    borderRadius: 6,
+    cursor: "pointer",
+  },
+  discardBtn: {
+    background: "#45475a",
+    border: "none",
+    color: "#f38ba8",
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "6px 14px",
+    borderRadius: 6,
+    cursor: "pointer",
   },
   closeBtn: {
     background: "none",
@@ -180,13 +383,14 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 16,
     display: "flex",
     justifyContent: "center",
+    overflow: "hidden",
   },
   video: {
     maxWidth: "100%",
-    maxHeight: "50vh",
+    maxHeight: "45vh",
     borderRadius: 8,
     background: "#000",
-    cursor: "pointer",
+    transition: "transform 0.15s ease-out, transform-origin 0.15s ease-out",
   },
   controls: {
     display: "flex",
@@ -207,30 +411,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 14,
   },
-  trimSection: {
-    padding: "8px 16px 16px",
-    borderTop: "1px solid #313244",
-  },
-  trimLabel: {
-    display: "flex",
-    justifyContent: "space-between",
+  zoomHint: {
+    marginLeft: "auto",
     fontSize: 12,
-    color: "#a6adc8",
-    marginBottom: 8,
-  },
-  sliderRow: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 8,
-  },
-  slider: {
-    width: "100%",
-    cursor: "pointer",
+    color: "#a78bfa",
   },
   trimInfo: {
-    textAlign: "center",
-    fontSize: 13,
-    color: "#a6adc8",
-    marginTop: 8,
+    fontSize: 12,
+    color: "#f9e2af",
+    fontFamily: "'JetBrains Mono', monospace",
   },
 };

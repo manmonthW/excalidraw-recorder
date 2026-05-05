@@ -1,47 +1,36 @@
 import {
   Circle,
   CircleStop,
-  Download,
   Mic,
   MicOff,
   Monitor,
   Pause,
   Play,
-  Scissors,
-  Square,
   X,
 } from "lucide-react";
 import { formatTime } from "@/lib/videoUtils";
-import type { RecordingMode, RecordingState } from "@/hooks/useRecorder";
+import type { RecordingState } from "@/hooks/useRecorder";
 
 interface ToolbarProps {
   recordingState: RecordingState;
   microphoneEnabled: boolean;
-  hasRecording: boolean;
   onStartCanvas: () => void;
   onStartScreen: () => void;
   onStop: () => void;
   onPause: () => void;
   onCancel: () => void;
   onToggleMic: () => void;
-  onTrim: () => void;
-  onExport: (format: "webm" | "mp4") => void;
-  onDiscard: () => void;
 }
 
 export function Toolbar({
   recordingState,
   microphoneEnabled,
-  hasRecording,
   onStartCanvas,
   onStartScreen,
   onStop,
   onPause,
   onCancel,
   onToggleMic,
-  onTrim,
-  onExport,
-  onDiscard,
 }: ToolbarProps) {
   const { isRecording, isPaused, elapsedSeconds } = recordingState;
 
@@ -53,7 +42,7 @@ export function Toolbar({
       </div>
 
       <div style={styles.center}>
-        {!isRecording && !hasRecording && (
+        {!isRecording && (
           <>
             <button
               onClick={onToggleMic}
@@ -110,42 +99,6 @@ export function Toolbar({
               title="Cancel recording"
             >
               <X size={18} />
-            </button>
-          </>
-        )}
-
-        {!isRecording && hasRecording && (
-          <>
-            <button onClick={onTrim} style={styles.actionBtn} title="Trim video">
-              <Scissors size={16} />
-              <span>Trim</span>
-            </button>
-
-            <button
-              onClick={() => onExport("webm")}
-              style={styles.exportBtn}
-              title="Download as WebM"
-            >
-              <Download size={16} />
-              <span>WebM</span>
-            </button>
-
-            <button
-              onClick={() => onExport("mp4")}
-              style={styles.exportBtn}
-              title="Download as MP4"
-            >
-              <Download size={16} />
-              <span>MP4</span>
-            </button>
-
-            <button
-              onClick={onDiscard}
-              style={{ ...styles.iconBtn, color: "#ef4444" }}
-              title="Discard recording"
-            >
-              <Square size={16} />
-              <span style={{ fontSize: 12, marginLeft: 4 }}>Discard</span>
             </button>
           </>
         )}
@@ -229,31 +182,6 @@ const styles: Record<string, React.CSSProperties> = {
     border: "none",
     borderRadius: 8,
     background: "#3b82f6",
-    color: "#fff",
-    cursor: "pointer",
-    fontSize: 13,
-    fontWeight: 600,
-  },
-  actionBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "6px 14px",
-    border: "1px solid #45475a",
-    borderRadius: 8,
-    background: "transparent",
-    color: "#cdd6f4",
-    cursor: "pointer",
-    fontSize: 13,
-  },
-  exportBtn: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "6px 14px",
-    border: "none",
-    borderRadius: 8,
-    background: "#22c55e",
     color: "#fff",
     cursor: "pointer",
     fontSize: 13,

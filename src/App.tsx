@@ -5,15 +5,18 @@ import { VideoPreview } from "./components/VideoPreview";
 import { CountdownOverlay } from "./components/CountdownOverlay";
 import { useRecorder, type RecordingResult } from "./hooks/useRecorder";
 import { downloadBlob, trimVideo, convertToMp4 } from "./lib/videoUtils";
+import type { ZoomKeyframe } from "./lib/motionEngine";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const preparingRef = useRef(false);
   const [microphoneEnabled, setMicrophoneEnabled] = useState(false);
   const [recording, setRecording] = useState<RecordingResult | null>(null);
   const [showPreview, setShowPreview] = useState(false);
-  const [trimRange, setTrimRange] = useState<{ startMs: number; endMs: number } | null>(null);
   const [exporting, setExporting] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [zoomKeyframes, setZoomKeyframes] = useState<ZoomKeyframe[]>([]);
+  const [trimRange, setTrimRange] = useState<{ startMs: number; endMs: number } | null>(null);
 
   const { state, startRecording, stopRecording, togglePause, cancelRecording } = useRecorder({
     canvasRef,
@@ -39,16 +42,27 @@ export default function App() {
   );
 
   const handleStartCanvas = useCallback(() => {
+    if (preparingRef.current || state.isRecording || countdown !== null) return;
+    preparingRef.current = true;
     runCountdown(async () => {
-      const result = await startRecording("canvas");
-      if (result) {
-        setRecording(result);
-        setTrimRange(null);
+      try {
+        const result = await startRecording("canvas");
+        if (result) {
+          setRecording(result);
+          setZoomKeyframes([]);
+          setTrimRange(null);
+          setShowPreview(true);
+        }
+      } finally {
+        preparingRef.current = false;
       }
     });
-  }, [runCountdown, startRecording]);
+  }, [runCountdown, startRecording, state.isRecording, countdown]);
 
   const handleStartScreen = useCallback(async () => {
+    if (preparingRef.current || state.isRecording || countdown !== null) return;
+    preparingRef.current = true;
+
     // Acquire screen share FIRST so user picks a window before countdown
     let stream: MediaStream;
     try {
@@ -58,16 +72,24 @@ export default function App() {
       });
     } catch {
       // User cancelled the screen picker
+      preparingRef.current = false;
       return;
     }
+
     runCountdown(async () => {
-      const result = await startRecording("screen", stream);
-      if (result) {
-        setRecording(result);
-        setTrimRange(null);
+      try {
+        const result = await startRecording("screen", stream);
+        if (result) {
+          setRecording(result);
+          setZoomKeyframes([]);
+          setTrimRange(null);
+          setShowPreview(true);
+        }
+      } finally {
+        preparingRef.current = false;
       }
     });
-  }, [runCountdown, startRecording]);
+  }, [runCountdown, startRecording, state.isRecording, countdown]);
 
   const handleExport = useCallback(
     async (format: "webm" | "mp4") => {
@@ -77,9 +99,14 @@ export default function App() {
       try {
         let blob = recording.blob;
 
-        // Apply trim if set
-        if (trimRange) {
-          blob = await trimVideo(blob, trimRange.startMs, trimRange.endMs);
+        // Apply trim and/or zoom keyframes
+        const hasKeyframes = zoomKeyframes.length > 0;
+        const hasTrim = !!trimRange
+          && (trimRange.startMs > 0 || trimRange.endMs < recording.duration - 10);
+        if (hasKeyframes || hasTrim) {
+          const startMs = trimRange?.startMs ?? 0;
+          const endMs = trimRange?.endMs ?? Infinity;
+          blob = await trimVideo(blob, startMs, endMs, zoomKeyframes);
         }
 
         // Convert format if needed
@@ -97,11 +124,12 @@ export default function App() {
         setExporting(false);
       }
     },
-    [recording, trimRange],
+    [recording, zoomKeyframes, trimRange],
   );
 
   const handleDiscard = useCallback(() => {
     setRecording(null);
+    setZoomKeyframes([]);
     setTrimRange(null);
     setShowPreview(false);
   }, []);
@@ -111,16 +139,12 @@ export default function App() {
       <Toolbar
         recordingState={state}
         microphoneEnabled={microphoneEnabled}
-        hasRecording={!!recording}
         onStartCanvas={handleStartCanvas}
         onStartScreen={handleStartScreen}
         onStop={stopRecording}
         onPause={togglePause}
         onCancel={cancelRecording}
         onToggleMic={() => setMicrophoneEnabled(!microphoneEnabled)}
-        onTrim={() => setShowPreview(true)}
-        onExport={handleExport}
-        onDiscard={handleDiscard}
       />
 
       <div style={styles.main}>
@@ -148,7 +172,10 @@ export default function App() {
       {showPreview && recording && (
         <VideoPreview
           blob={recording.blob}
+          onKeyframesChange={setZoomKeyframes}
           onTrimChange={(s, e) => setTrimRange({ startMs: s, endMs: e })}
+          onExport={handleExport}
+          onDiscard={handleDiscard}
           onClose={() => setShowPreview(false)}
         />
       )}
