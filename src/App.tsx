@@ -61,6 +61,17 @@ export default function App() {
 
   const handleStartScreen = useCallback(async () => {
     if (preparingRef.current || state.isRecording || countdown !== null) return;
+
+    // getDisplayMedia requires a secure context (HTTPS or localhost)
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      alert(
+        "Screen recording is not available.\n\n" +
+        "This feature requires HTTPS or localhost.\n" +
+        "Current origin: " + window.location.origin,
+      );
+      return;
+    }
+
     preparingRef.current = true;
 
     // Acquire screen share FIRST so user picks a window before countdown
