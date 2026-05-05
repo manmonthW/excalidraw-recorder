@@ -33,13 +33,27 @@ export function Whiteboard({ canvasRef, isRecording }: WhiteboardProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState(false);
   const rafRef = useRef<number>(0);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [initialData, setInitialData] = useState<any>(undefined);
 
   // Load Excalidraw dynamically
   useEffect(() => {
-    import("@excalidraw/excalidraw").then((mod) => {
-      ExcalidrawComponent = mod.Excalidraw as unknown as typeof ExcalidrawComponent;
-      MainMenuComponent = mod.MainMenu;
-      MainMenuItemComponent = mod.MainMenu.Item;
+    Promise.all([
+      import("@excalidraw/excalidraw").then((mod) => {
+        ExcalidrawComponent = mod.Excalidraw as unknown as typeof ExcalidrawComponent;
+        MainMenuComponent = mod.MainMenu;
+        MainMenuItemComponent = mod.MainMenu.Item;
+      }),
+      fetch("/default-scene.excalidraw")
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+    ]).then(([, scene]) => {
+      if (scene?.elements) {
+        setInitialData({
+          elements: scene.elements,
+          appState: { ...scene.appState, collaborators: new Map() },
+        });
+      }
       setLoaded(true);
     }).catch((err) => {
       console.error("Failed to load Excalidraw:", err);
@@ -116,6 +130,7 @@ export function Whiteboard({ canvasRef, isRecording }: WhiteboardProps) {
     >
       <ExcalidrawComponent
         theme="light"
+        initialData={initialData}
         UIOptions={{
           canvasActions: {},
         }}
