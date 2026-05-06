@@ -109,22 +109,23 @@ export default function App() {
 
       try {
         let blob = recording.blob;
+        const startMs = trimRange?.startMs ?? 0;
+        const endMs = trimRange?.endMs ?? Infinity;
 
-        // Apply trim and/or zoom keyframes
-        const hasKeyframes = zoomKeyframes.length > 0;
-        const hasTrim = !!trimRange
-          && (trimRange.startMs > 0 || trimRange.endMs < recording.duration - 10);
-        if (hasKeyframes || hasTrim) {
-          const startMs = trimRange?.startMs ?? 0;
-          const endMs = trimRange?.endMs ?? Infinity;
-          blob = await trimVideo(blob, startMs, endMs, zoomKeyframes);
-        }
-
-        // Convert format if needed
-        if (format === "mp4") {
-          blob = await convertToMp4(blob);
-        } else if (format === "gif") {
-          blob = await convertToGif(blob);
+        if (format === "gif") {
+          // GIF: single-pass with trim + zoom applied directly
+          blob = await convertToGif(blob, startMs, endMs, zoomKeyframes);
+        } else {
+          // WebM/MP4: re-encode with trim + zoom if needed
+          const hasKeyframes = zoomKeyframes.length > 0;
+          const hasTrim = !!trimRange
+            && (trimRange.startMs > 0 || trimRange.endMs < recording.duration - 10);
+          if (hasKeyframes || hasTrim) {
+            blob = await trimVideo(blob, startMs, endMs, zoomKeyframes);
+          }
+          if (format === "mp4") {
+            blob = await convertToMp4(blob);
+          }
         }
 
         const ext = format;

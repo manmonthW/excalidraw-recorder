@@ -184,12 +184,16 @@ export async function trimVideo(
 }
 
 /**
- * Convert a video blob to GIF.
- * Plays the video, samples frames at 10fps, encodes via gif.js worker.
+ * Convert a video blob to GIF with optional trim and zoom keyframes.
+ * Uses accelerated playback + requestAnimationFrame for fast frame capture
+ * (avoids slow per-frame seeking on WebM).
  */
 export async function convertToGif(
   videoBlob: Blob,
-  maxWidth = 640,
+  startMs = 0,
+  endMs = Infinity,
+  keyframes: ZoomKeyframe[] = [],
+  maxWidth = 480,
 ): Promise<Blob> {
   const GIF = (await import("gif.js")).default;
 
@@ -227,9 +231,11 @@ export async function convertToGif(
       await new Promise<void>((r) => { video.onseeked = () => r(); });
     }
 
-    const scale = Math.min(1, maxWidth / video.videoWidth);
-    const w = Math.round(video.videoWidth * scale);
-    const h = Math.round(video.videoHeight * scale);
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const scale = Math.min(1, maxWidth / vw);
+    const w = Math.round(vw * scale);
+    const h = Math.round(vh * scale);
 
     const canvas = document.createElement("canvas");
     canvas.width = w;
@@ -237,26 +243,81 @@ export async function convertToGif(
     container.appendChild(canvas);
     const ctx = canvas.getContext("2d")!;
 
+    // Source-size canvas for zoom cropping
+    const srcCanvas = document.createElement("canvas");
+    srcCanvas.width = vw;
+    srcCanvas.height = vh;
+    const srcCtx = srcCanvas.getContext("2d")!;
+
     const gif = new GIF({
-      workers: 2,
+      workers: 4,
       quality: 10,
       width: w,
       height: h,
       workerScript: "/gif.worker.js",
     });
 
-    // Sample frames at 10fps via seeking
-    const fps = 10;
+    const startSec = startMs / 1000;
+    const endSec = isFinite(endMs) ? endMs / 1000 : dur;
+    const fps = 8;
+    const frameInterval = 1 / fps;
     const frameDelay = 1000 / fps;
-    const totalFrames = Math.floor(dur * fps);
-    console.log(`[convertToGif] ${totalFrames} frames, ${w}x${h}`);
 
-    for (let i = 0; i < totalFrames; i++) {
-      video.currentTime = i / fps;
+    // Seek to start
+    if (startSec > 0.05) {
+      video.currentTime = startSec;
       await new Promise<void>((r) => { video.onseeked = () => r(); });
-      ctx.drawImage(video, 0, 0, w, h);
-      gif.addFrame(ctx, { copy: true, delay: frameDelay });
     }
+
+    // Play at 4x speed and sample frames via requestAnimationFrame
+    video.playbackRate = 4;
+    await video.play();
+
+    let lastCaptureTime = -1;
+    let frameCount = 0;
+
+    await new Promise<void>((resolve) => {
+      const captureFrame = () => {
+        if (video.paused || video.ended || video.currentTime >= endSec) {
+          video.pause();
+          resolve();
+          return;
+        }
+
+        const t = video.currentTime;
+        if (t - lastCaptureTime >= frameInterval * 0.8) {
+          lastCaptureTime = t;
+
+          // Apply zoom keyframes if any
+          const transform = getTransformAtTime(t, keyframes);
+          if (transform.scale > 1.001) {
+            const { sx, sy, sw, sh } = transformToSourceRect(transform, vw, vh);
+            srcCtx.drawImage(video, 0, 0, vw, vh);
+            ctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, w, h);
+          } else {
+            ctx.drawImage(video, 0, 0, w, h);
+          }
+
+          gif.addFrame(ctx, { copy: true, delay: frameDelay });
+          frameCount++;
+        }
+
+        requestAnimationFrame(captureFrame);
+      };
+      requestAnimationFrame(captureFrame);
+
+      // Safety timeout
+      const maxMs = ((endSec - startSec) / 4 + 10) * 1000;
+      setTimeout(() => {
+        if (!video.paused && !video.ended) {
+          console.warn(`[convertToGif] safety timeout at ${frameCount} frames`);
+          video.pause();
+          resolve();
+        }
+      }, maxMs);
+    });
+
+    console.log(`[convertToGif] captured ${frameCount} frames, ${w}x${h}, encoding...`);
 
     const blob = await new Promise<Blob>((resolve, reject) => {
       gif.on("finished", (b: Blob) => resolve(b));
