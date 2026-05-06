@@ -4,7 +4,7 @@ import { Toolbar } from "./components/Toolbar";
 import { VideoPreview } from "./components/VideoPreview";
 import { CountdownOverlay } from "./components/CountdownOverlay";
 import { useRecorder, type RecordingResult } from "./hooks/useRecorder";
-import { downloadBlob, trimVideo, convertToMp4 } from "./lib/videoUtils";
+import { downloadBlob, trimVideo, convertToMp4, convertToGif } from "./lib/videoUtils";
 import type { ZoomKeyframe } from "./lib/motionEngine";
 
 export default function App() {
@@ -103,7 +103,7 @@ export default function App() {
   }, [runCountdown, startRecording, state.isRecording, countdown]);
 
   const handleExport = useCallback(
-    async (format: "webm" | "mp4") => {
+    async (format: "webm" | "mp4" | "gif") => {
       if (!recording) return;
       setExporting(true);
 
@@ -123,9 +123,11 @@ export default function App() {
         // Convert format if needed
         if (format === "mp4") {
           blob = await convertToMp4(blob);
+        } else if (format === "gif") {
+          blob = await convertToGif(blob);
         }
 
-        const ext = format === "mp4" ? "mp4" : "webm";
+        const ext = format;
         const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
         downloadBlob(blob, `excalidraw-recording-${timestamp}.${ext}`);
       } catch (err) {

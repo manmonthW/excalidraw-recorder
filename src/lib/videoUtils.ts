@@ -184,6 +184,98 @@ export async function trimVideo(
 }
 
 /**
+ * Convert a video blob to GIF.
+ * Plays the video, samples frames at 10fps, encodes via gif.js worker.
+ */
+export async function convertToGif(
+  videoBlob: Blob,
+  maxWidth = 640,
+): Promise<Blob> {
+  const GIF = (await import("gif.js")).default;
+
+  const url = URL.createObjectURL(videoBlob);
+  const container = document.createElement("div");
+  container.style.cssText =
+    "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden;opacity:0";
+  document.body.appendChild(container);
+
+  const video = document.createElement("video");
+  video.playsInline = true;
+  video.muted = true;
+  video.src = url;
+  container.appendChild(video);
+
+  try {
+    // Wait for metadata
+    if (video.readyState < 1) {
+      await new Promise<void>((res, rej) => {
+        video.onloadedmetadata = () => res();
+        video.onerror = () => rej(new Error("Failed to load video for GIF"));
+      });
+    }
+    if (video.readyState < 3) {
+      await new Promise<void>((r) => { video.oncanplay = () => r(); });
+    }
+
+    // Discover duration
+    let dur = video.duration;
+    if (!isFinite(dur)) {
+      video.currentTime = 1e10;
+      await new Promise<void>((r) => { video.onseeked = () => r(); });
+      dur = video.currentTime;
+      video.currentTime = 0;
+      await new Promise<void>((r) => { video.onseeked = () => r(); });
+    }
+
+    const scale = Math.min(1, maxWidth / video.videoWidth);
+    const w = Math.round(video.videoWidth * scale);
+    const h = Math.round(video.videoHeight * scale);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    container.appendChild(canvas);
+    const ctx = canvas.getContext("2d")!;
+
+    const gif = new GIF({
+      workers: 2,
+      quality: 10,
+      width: w,
+      height: h,
+      workerScript: "/gif.worker.js",
+    });
+
+    // Sample frames at 10fps via seeking
+    const fps = 10;
+    const frameDelay = 1000 / fps;
+    const totalFrames = Math.floor(dur * fps);
+    console.log(`[convertToGif] ${totalFrames} frames, ${w}x${h}`);
+
+    for (let i = 0; i < totalFrames; i++) {
+      video.currentTime = i / fps;
+      await new Promise<void>((r) => { video.onseeked = () => r(); });
+      ctx.drawImage(video, 0, 0, w, h);
+      gif.addFrame(ctx, { copy: true, delay: frameDelay });
+    }
+
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      gif.on("finished", (b: Blob) => resolve(b));
+      gif.on("error", (e: Error) => reject(e));
+      gif.render();
+    });
+
+    console.log(`[convertToGif] done: ${(blob.size / 1024 / 1024).toFixed(2)} MB`);
+    return blob;
+  } finally {
+    video.pause();
+    video.src = "";
+    video.load();
+    if (container.parentNode) document.body.removeChild(container);
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
  * Convert WebM blob to MP4.
  * Currently returns WebM as-is (MP4 muxer to be added).
  */

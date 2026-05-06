@@ -15,7 +15,7 @@ interface VideoPreviewProps {
   blob: Blob;
   onKeyframesChange: (keyframes: ZoomKeyframe[]) => void;
   onTrimChange: (startMs: number, endMs: number) => void;
-  onExport: (format: "webm" | "mp4") => void;
+  onExport: (format: "webm" | "mp4" | "gif") => void;
   onDiscard: () => void;
   onClose: () => void;
 }
@@ -234,6 +234,9 @@ export function VideoPreview({ blob, onKeyframesChange, onTrimChange, onExport, 
             <button onClick={() => onExport("mp4")} style={styles.exportBtn} title="Export as MP4">
               MP4
             </button>
+            <button onClick={() => onExport("gif")} style={styles.gifBtn} title="Export as GIF">
+              GIF
+            </button>
             <button onClick={onDiscard} style={styles.discardBtn} title="Discard recording">
               Discard
             </button>
@@ -353,6 +356,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
   exportBtn: {
     background: "#3b82f6",
+    border: "none",
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: 600,
+    padding: "6px 14px",
+    borderRadius: 6,
+    cursor: "pointer",
+  },
+  gifBtn: {
+    background: "#f59f00",
     border: "none",
     color: "#fff",
     fontSize: 13,
